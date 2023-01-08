@@ -9,6 +9,7 @@ function(add_example_program target_name)
   add_executable(${target_name} "${target_name}.c")
   target_link_libraries(${target_name} err)
   target_link_libraries(${target_name} pthread)
+  target_link_libraries(${target_name} rt)
 endfunction()
 
 add_library(err err.c)

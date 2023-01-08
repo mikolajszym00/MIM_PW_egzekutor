@@ -4,6 +4,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+
 #include "utils.h"
 #include "err.h"
 
@@ -11,44 +15,73 @@ const int MAX_N_TASKS = 4096;
 int free_task_id = 0;
 
 struct Task {
+    int id;
     int read_dsc_out;
     int read_dsc_err;
 };
 
 void run(struct Task* tk, char** parts) {
-    int pipe_dsc_out[2];
-    ASSERT_SYS_OK(pipe(pipe_dsc_out));
+    const char* shm_name[64];
+    snprintf(shm_name, sizeof(shm_name), "executor_task_%d", tk->id);
 
-    int pipe_dsc_err[2];
-    ASSERT_SYS_OK(pipe(pipe_dsc_err));
+    const int shm_size = 1024;
+
+    int fd_memory = shm_open(shm_name, O_CREAT | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
+    ASSERT_SYS_OK(fd_memory);
+    ASSERT_SYS_OK(ftruncate(fd_memory, shm_size));
+
+    char* mapped_mem = mmap(NULL, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_memory, 0);
+    printf("there %zd was: %s.end\n", strlen(mapped_mem), mapped_mem);
 
     pid_t pid;
     ASSERT_SYS_OK(pid = fork());
 
     if (!pid) {
-        ASSERT_SYS_OK(close(pipe_dsc_out[0])); // Close the read descriptor.
-        ASSERT_SYS_OK(close(pipe_dsc_err[0])); // Close the read descriptor.
-
         printf("Task %d started: pid %d.\n", 0, getpid());
 
-        ASSERT_SYS_OK(dup2(pipe_dsc_out[1], STDOUT_FILENO));
-        ASSERT_SYS_OK(dup2(pipe_dsc_err[1], STDERR_FILENO));
+        ASSERT_SYS_OK(dup2(fd_memory, STDOUT_FILENO));
+//        ASSERT_SYS_OK(dup2(fd_memory, STDERR_FILENO));
 
-        ASSERT_SYS_OK(close(pipe_dsc_out[1]));  // Close the original copy.
-        ASSERT_SYS_OK(close(pipe_dsc_err[1]));  // Close the original copy.
-
+//        exit(2137);
         ASSERT_SYS_OK(execvp(parts[1], parts+1));
     } else {
-        ASSERT_SYS_OK(close(pipe_dsc_out[1])); // Close the write descriptor.
-        ASSERT_SYS_OK(close(pipe_dsc_err[1])); // Close the write descriptor.
+        tk->read_dsc_out = fd_memory;
+//        tk->read_dsc_err = pipe_dsc_err[0];
 
-        tk->read_dsc_out = pipe_dsc_out[0];
-        tk->read_dsc_err = pipe_dsc_err[0];
+        usleep(3000000);
+        printf("there %zd was: %s.end\n", strlen(mapped_mem), mapped_mem);
+
+        mapped_mem[9] = 'e';
+        mapped_mem[10] = '\0';
+
+        printf("there %zd was: %s.end\n", strlen(mapped_mem), mapped_mem);
+
     }
+
+    ASSERT_SYS_OK(pid = fork());
+
+    if (!pid) {
+        printf("Task %d started: pid %d.\n", 0, getpid());
+
+        ASSERT_SYS_OK(dup2(fd_memory, STDOUT_FILENO));
+//        ASSERT_SYS_OK(dup2(fd_memory, STDERR_FILENO));
+
+//        exit(2137);
+        ASSERT_SYS_OK(execvp(parts[1], parts+1));
+    } else {
+        tk->read_dsc_out = fd_memory;
+//        tk->read_dsc_err = pipe_dsc_err[0];
+
+        usleep(3000000);
+        printf("there %zd was: %s.end\n", strlen(mapped_mem), mapped_mem);
+
+    }
+
+//    ASSERT_SYS_OK(close(fd_memory));
+//    ASSERT_SYS_OK(shm_unlink(shm_name));
 }
 
-void out(char** parts) {
-
+void out(struct Task* tk) {
 
 }
 
@@ -84,7 +117,9 @@ int main() {
             run(&tk, parts);
         } else {
         if (strcmp(parts[0], "out") == 0) {
-            out(parts);
+            int num = atoi(parts[1]);
+
+            out(&tasks[num]);
         }
 
         }
