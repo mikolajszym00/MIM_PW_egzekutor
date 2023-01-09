@@ -17,9 +17,10 @@
 #include "err.h"
 
 const int MAX_N_TASKS = 4096;
-int free_task_id = 0;
+int free_task_id = -1;
 
 struct Task {
+    int id;
     int pid;
     int read_dsc_out;
     int read_dsc_err;
@@ -29,6 +30,7 @@ struct Task {
     pthread_t out_thread;
     pthread_t err_thread;
     pthread_t close_thread;
+    pthread_mutex_t* mutex;
 };
 
 struct pair_task_bool {
@@ -90,7 +92,7 @@ void* create_stream_process(void* data) {
 
         get_last_line(&sm);
 
-        printf("sentence:\n%s.\n", sm);
+//        printf("sentence:\n%s.\n", sm);
 
         *s = strdup(sm);
     }
@@ -101,8 +103,8 @@ void* create_stream_process(void* data) {
     return NULL;
 }
 
-void create_exec_process(char** parts, int* out, int* err) {
-    printf("Task %d started: pid %d.\n", 0, getpid());
+void create_exec_process(char** parts, int* out, int* err, int num) {
+    printf("Task %d started: pid %d.\n", num, getpid());
 //        usleep(2000000);
     // Close the read descriptor.
     ASSERT_SYS_OK(close(out[0]));
@@ -123,12 +125,19 @@ void create_exec_process(char** parts, int* out, int* err) {
 void* close_task(void* data) { // niech sam sie zabija
     struct Task* tk = data;
 
-    int status = 77;
-    int a = wait(NULL);
+    int status;
+    ASSERT_SYS_OK(waitpid(tk->pid, &status, 0));
 
-    pthread_mutex_lock(mutex);
-    printf("Task %d ended: status %d.\n", a, status);
-    pthread_mutex_unlock(mutex);
+    pthread_mutex_lock(tk->mutex);
+
+    if (WIFEXITED(status))
+        printf("Task %d ended: status %d.\n", tk->id, WEXITSTATUS(status));
+    else if (WIFSIGNALED(status))
+        printf("Task T ended: signalled.\n");
+    else
+        printf("Task T ended: unknown.\n");
+
+    pthread_mutex_unlock(tk->mutex);
 
     tk->quit = true;
     close(tk->read_dsc_out); // nic nie robi?
@@ -137,7 +146,7 @@ void* close_task(void* data) { // niech sam sie zabija
     pthread_join(tk->out_thread, NULL);
     pthread_join(tk->err_thread, NULL);
 
-    printf("musze sie wykonac\n");
+//    printf("musze sie wykonac\n");
 
     return NULL;
 }
@@ -169,7 +178,7 @@ void run(struct Task* tk, char** parts) {
     ASSERT_SYS_OK(pid = fork());
     if (!pid) {
 //        usleep(5000000);
-        create_exec_process(parts, pipe_dsc_out, pipe_dsc_err);
+        create_exec_process(parts, pipe_dsc_out, pipe_dsc_err, tk->id);
     } else {
         tk->pid = pid;
 
@@ -181,11 +190,11 @@ void run(struct Task* tk, char** parts) {
 }
 
 void out(struct Task* tk) {
-    printf("You typed: '%s'\n", tk->s_out);
+    printf("Task %d stdout: '%s'.\n", tk->id, tk->s_out);
 }
 
 void err(struct Task* tk) {
-    printf("You typed: '%s'\n", tk->s_err);
+    printf("Task %d stderr: '%s'.\n", tk->id, tk->s_err);
 }
 
 void clear_task(struct Task* tk) {
@@ -201,12 +210,15 @@ void quit(struct Task tasks[]) {
         clear_task(&tasks[i]);
     }
 
-    printf("killed\n");
-    exit(0);
+//    printf("killed\n");
 }
 
 int main() {
     struct Task tasks[MAX_N_TASKS];
+
+    pthread_mutex_t mutex;
+    pthread_mutex_init(&mutex, NULL);
+    pthread_mutex_lock(&mutex);
 
     char *buffer;
     size_t bufsize = 512;
@@ -220,20 +232,22 @@ int main() {
         }
 
         buffer[strcspn(buffer, "\n")] = 0;
-        printf("Whole sentence: '%s'\n", buffer);
+//        printf("Whole sentence: '%s'\n", buffer);
 
         char **parts = split_string(buffer);
 
-        int i = 0;
-        while (parts[i] != NULL) {
-            printf("You typed: '%s'\n", parts[i]);
-
-            i++;
-        }
+//        int i = 0;
+//        while (parts[i] != NULL) {
+//            printf("You typed: '%s'\n", parts[i]);
+//
+//            i++;
+//        }
 
         if (strcmp(parts[0], "run") == 0) {
-            struct Task *tk = &tasks[free_task_id];
             free_task_id++;
+            struct Task *tk = &tasks[free_task_id];
+            tk->mutex = &mutex;
+            tk->id = free_task_id;
             run(tk, parts);
         }
 
@@ -267,17 +281,22 @@ int main() {
 
         if (strcmp(parts[0], "quit") == 0) {
             quit(tasks);
+            pthread_mutex_destroy(&mutex);
+            exit(0);
         }
 
         free_split_string(parts);
 
-        pthread_mutex_unlock(mutex);
-        pthread_mutex_lock(mutex);
+//        usleep(1000000);
+        pthread_mutex_unlock(&mutex);
+        usleep(1000);
+        pthread_mutex_lock(&mutex);
     }
 
     free(buffer);
+
     quit(tasks);
-//        usleep(5000000);
+    pthread_mutex_destroy(&mutex);
 
 
 
@@ -295,107 +314,3 @@ int main() {
 
     return 0;
 }
-
-
-//void* sigchild(void* data) {
-//    printf("tak");
-//
-//    int* dsc = data;
-//
-//    sigset_t mask;
-//    int sfd;
-//    struct signalfd_siginfo fdsi;
-//    ssize_t s;
-//
-//    sigemptyset(&mask);
-//    sigaddset(&mask, SIGCHLD);
-//
-//    printf("tak");
-//
-//    /* Block signals so that they aren't handled
-//       according to their default dispositions. */
-//
-//    if (sigprocmask(SIG_BLOCK, &mask, NULL) == -1)
-//        printf("sigprocmask");
-//    printf("tak");
-//
-//    sfd = signalfd(-1, &mask, 0); //-1
-//    if (sfd == -1)
-//        printf("signalfd");
-//
-//    printf("czyta");
-//    s = read(sfd, &fdsi, sizeof(fdsi));
-//    if (s != sizeof(fdsi))
-//        printf("read");
-//    printf("tak");
-//    if (fdsi.ssi_signo == SIGCHLD) {
-//        printf("Got SIGCHLD\n");
-//    } else {
-//        printf("Read unexpected signal\n");
-//    }
-//    printf("tak");
-//    return NULL;
-//}
-
-
-//        printf("Task %d parent: pid %d.\n", 0, getpid());
-//        struct sigaction new_action;
-//
-//        sigemptyset(&new_action.sa_mask);
-//        new_action.sa_flags = SA_NOCLDWAIT;
-////        new_action.sa_handler = handler;
-//        ASSERT_SYS_OK(sigaction(SIGCHLD, &new_action, NULL));
-//
-//        printf("Task %d parent: pid %d.\n", 0, getpid());
-//
-//        sigset_t signals_to_wait_for;
-//        sigemptyset(&signals_to_wait_for);
-//        sigaddset(&signals_to_wait_for, SIGCHLD);
-//
-//        printf("Task %d parent: pid %d.\n", 0, getpid());
-//        ASSERT_SYS_OK(sigprocmask(SIG_BLOCK, &signals_to_wait_for, NULL));
-//
-//        printf("Task %d parent: pid %d.\n", 0, getpid());
-//        siginfo_t info;
-//        sigwaitinfo(&signals_to_wait_for, &info);
-//        printf("Task %d parent: pid %d.\n", 0, getpid());
-//
-//        printf("Parent: got signal >>%s<< from %d\n", strsignal(info.si_signo), info.si_pid);
-//
-//        ASSERT_SYS_OK(sigprocmask(SIG_UNBLOCK, &signals_to_wait_for, NULL));
-
-//void create_exec_process(char** parts, int* out, int* err) {
-//    pid_t pid;
-//    ASSERT_SYS_OK(pid = fork());
-//
-//    printf("Task %d started: pid %d.\n", 0, getpid());
-//
-//    if (!pid) {
-//        ASSERT_SYS_OK(pid = fork());
-//        if (!pid) {
-//            // Close the read descriptor.
-//            ASSERT_SYS_OK(close(out[0]));
-//            ASSERT_SYS_OK(close(err[0]));
-//
-//
-//
-//            ASSERT_SYS_OK(dup2(out[1], STDOUT_FILENO));
-//            ASSERT_SYS_OK(dup2(err[1], STDERR_FILENO));
-//
-//            ASSERT_SYS_OK(close(out[1]));  // Close the original copy.
-//            ASSERT_SYS_OK(close(err[1]));  // Close the original copy.
-//
-//            ASSERT_SYS_OK(execvp(parts[1], parts+1));
-//        } else {
-//            int status = 77;
-//            int a = wait(NULL);
-//            printf("Task %zd ended: status %d.\n", pid, status); // ograniczony dostep
-//
-//            exit(0);
-//        }
-////        printf("Task %d parent: pid %s.\n", 0, parts[0]);
-////        printf("Task %d parent: pid %s.\n", 0, parts[1]);
-////        printf("Task %d parent: pid %s.\n", 0, parts[2]);
-//
-//    }
-//}
