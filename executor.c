@@ -8,6 +8,8 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#include <pthread.h>
+
 #include "utils.h"
 #include "err.h"
 
@@ -18,67 +20,111 @@ struct Task {
     int id;
     int read_dsc_out;
     int read_dsc_err;
+    char* s_err;
+    char* s_out;
+    bool quit;
 };
 
-void run(struct Task* tk, char** parts) {
-    const char* shm_name[64];
-    snprintf(shm_name, sizeof(shm_name), "executor_task_%d", tk->id);
+struct pair_task_bool {
+    struct Task* task;
+    bool is_out;
+};
 
-    const int shm_size = 1024;
+void* create_stream_process(void* data) {
+    struct pair_task_bool* ptb = data;
 
-    int fd_memory = shm_open(shm_name, O_CREAT | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
-    ASSERT_SYS_OK(fd_memory);
-    ASSERT_SYS_OK(ftruncate(fd_memory, shm_size));
+    struct Task* tk = ptb->task;
 
-    char* mapped_mem = mmap(NULL, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_memory, 0);
-    printf("there %zd was: %s.end\n", strlen(mapped_mem), mapped_mem);
+    int read_dsc;
+    char** s;
 
+    if (ptb->is_out) {
+        read_dsc = tk->read_dsc_out;
+        s = &tk->s_out;
+    } else {
+        read_dsc = tk->read_dsc_err;
+        s = &tk->s_err;
+    }
+
+    char* sm;
+    size_t bufsize = 1024;
+
+    sm = (char *)malloc(bufsize * sizeof(char));
+
+    while (!tk->quit) {
+        ssize_t nread = read(read_dsc, sm, 1024);
+        ASSERT_SYS_OK(nread); // potrzeba mutexow
+
+        if (nread == 0) {
+            printf("nread == 0\n");
+        }
+
+        printf("i have sth to say: pid %zd, sentence %s.\n", nread, sm);
+
+        *s = strdup(sm);
+    }
+
+    free(sm);
+    return NULL;
+}
+
+void create_exec_process(char** parts, int* out, int* err) {
     pid_t pid;
     ASSERT_SYS_OK(pid = fork());
 
     if (!pid) {
+        // Close the read descriptor.
+        ASSERT_SYS_OK(close(out[0]));
+        ASSERT_SYS_OK(close(err[0]));
+
         printf("Task %d started: pid %d.\n", 0, getpid());
 
-        ASSERT_SYS_OK(dup2(fd_memory, STDOUT_FILENO));
-//        ASSERT_SYS_OK(dup2(fd_memory, STDERR_FILENO));
+        ASSERT_SYS_OK(dup2(out[1], STDOUT_FILENO));
+        ASSERT_SYS_OK(dup2(err[1], STDERR_FILENO));
+
+//        ASSERT_SYS_OK(close(out[1]));  // Close the original copy.
+//        ASSERT_SYS_OK(close(err[1]));  // Close the original copy.
 
 //        exit(2137);
         ASSERT_SYS_OK(execvp(parts[1], parts+1));
     } else {
-        tk->read_dsc_out = fd_memory;
-//        tk->read_dsc_err = pipe_dsc_err[0];
-
-        usleep(3000000);
-        printf("there %zd was: %s.end\n", strlen(mapped_mem), mapped_mem);
-
-        mapped_mem[9] = 'e';
-        mapped_mem[10] = '\0';
-
-        printf("there %zd was: %s.end\n", strlen(mapped_mem), mapped_mem);
-
+        // Close the read descriptor.
     }
+}
 
-    ASSERT_SYS_OK(pid = fork());
+void run(struct Task* tk, char** parts) {
+    tk->quit = false;
+    tk->s_out = "";
+    tk->s_err = "";
 
-    if (!pid) {
-        printf("Task %d started: pid %d.\n", 0, getpid());
+    int pipe_dsc_out[2], pipe_dsc_err[2];
 
-        ASSERT_SYS_OK(dup2(fd_memory, STDOUT_FILENO));
-//        ASSERT_SYS_OK(dup2(fd_memory, STDERR_FILENO));
+    ASSERT_SYS_OK(pipe(pipe_dsc_out));
+    ASSERT_SYS_OK(pipe(pipe_dsc_err));
 
-//        exit(2137);
-        ASSERT_SYS_OK(execvp(parts[1], parts+1));
-    } else {
-        tk->read_dsc_out = fd_memory;
-//        tk->read_dsc_err = pipe_dsc_err[0];
+    tk->read_dsc_out = pipe_dsc_out[0];
+    tk->read_dsc_err = pipe_dsc_err[0];
 
-        usleep(3000000);
-        printf("there %zd was: %s.end\n", strlen(mapped_mem), mapped_mem);
+    pthread_t out_thread, err_thread;
+    struct pair_task_bool ptb_out, ptb_err;
 
-    }
+    ptb_out.task = tk;
+    ptb_out.is_out = true;
+    pthread_create(&out_thread, NULL, create_stream_process, (void*)&ptb_out);
 
-//    ASSERT_SYS_OK(close(fd_memory));
-//    ASSERT_SYS_OK(shm_unlink(shm_name));
+    ptb_err.task = tk;
+    ptb_err.is_out = false;
+    pthread_create(&err_thread, NULL, create_stream_process, (void*)&ptb_err);
+
+    create_exec_process(parts, pipe_dsc_out, pipe_dsc_err);
+//    create_stream_process(tk, pipe_dsc_out[0], false);
+//    create_stream_process(tk, pipe_dsc_err[0], true);
+
+
+//    ASSERT_ZERO(pthread_join(out_thread, NULL));
+//    ASSERT_ZERO(pthread_join(err_thread, NULL));
+
+//    ASSERT_SYS_OK(close(pipe_dsc[0]))
 }
 
 void out(struct Task* tk) {
@@ -112,9 +158,9 @@ int main() {
         printf("done \n");
 
         if (strcmp(parts[0], "run") == 0) {
-            struct Task tk = tasks[free_task_id];
+            struct Task* tk = &tasks[free_task_id];
             free_task_id++;
-            run(&tk, parts);
+            run(tk, parts);
         } else {
         if (strcmp(parts[0], "out") == 0) {
             int num = atoi(parts[1]);
@@ -123,6 +169,16 @@ int main() {
         }
 
         }
+
+
+
+        usleep(3000000);
+
+        tasks[0].quit = true;
+
+        printf("You typed: '%s'\n", tasks[0].s_out);
+        printf("You typed: '%s'\n", tasks[0].s_err);
+
 
         free_split_string(parts);
 
