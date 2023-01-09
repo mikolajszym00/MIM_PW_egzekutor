@@ -4,14 +4,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-//#include <sys/mman.h>
-//#include <fcntl.h>
-//#include <sys/stat.h>
-
 #include <pthread.h>
 #include <sys/wait.h>
-//#include <sys/signalfd.h>
-//#include <signal.h>
 
 #include "utils.h"
 #include "err.h"
@@ -26,12 +20,10 @@ struct Task {
     int read_dsc_err;
     char* s_err;
     char* s_out;
-    bool quit;
     pthread_t out_thread;
     pthread_t err_thread;
     pthread_t close_thread;
 
-    pthread_mutex_t* mutex;
     pthread_mutex_t* mutex_out;
     pthread_mutex_t* mutex_err;
 };
@@ -46,12 +38,11 @@ void get_last_line(char** msg) {
 
     char* ptr = strtok(*msg, delim);
 
-    char* final_sentence = (char *)malloc(1024 * sizeof(char));
+    char* final_sentence = (char *)malloc(strlen((const char *) msg) * sizeof(char));
 
     while(ptr != NULL)
     {
         final_sentence = strdup(ptr);
-//        printf("'%s'\n", ptr);
         ptr = strtok(NULL, delim);
     }
 
@@ -77,7 +68,7 @@ void* create_stream_process(void* data) {
         s = &tk->s_err;
         mutex = tk->mutex_err;
     }
-//    printf("wyszedlem\n");
+
     char* sm;
     size_t bufsize = 1024;
 
@@ -85,22 +76,13 @@ void* create_stream_process(void* data) {
 
     while (true) {
         ssize_t nread = read(read_dsc, sm, 1024);
-//        printf("pid: %d, me %d, nread %zd\n", tk->pid, tk->id, nread);
         ASSERT_SYS_OK(nread);
 
-        if (nread == 0) {
-//            printf("nread == 0\n");
+        if (nread == 0)
             break;
-        }
 
         sm[nread] = '\0';
-
-
         get_last_line(&sm);
-//        printf("nazywam sie %d: '%s'.\n", tk->id, sm);
-
-//        printf("sentence:\n%s.\n", sm);
-
 
         pthread_mutex_lock(mutex);
         *s = strdup(sm);
@@ -108,50 +90,37 @@ void* create_stream_process(void* data) {
     }
 
     free(sm);
-//    printf("wyszedlem\n");
-
     return NULL;
 }
 
 void create_exec_process(char** parts, int* out, int* err) {
-//    printf("Task %d started: pid %d.\n", num, getpid());
-//        usleep(2000000);
-    // Close the read descriptor.
     ASSERT_SYS_OK(close(out[0]));
     ASSERT_SYS_OK(close(err[0]));
 
     ASSERT_SYS_OK(dup2(out[1], STDOUT_FILENO));
     ASSERT_SYS_OK(dup2(err[1], STDERR_FILENO));
 
-    ASSERT_SYS_OK(close(out[1])); // Close the original copy.
-    ASSERT_SYS_OK(close(err[1])); // Close the original copy.
-
-//        set_close_on_exec(STDOUT_FILENO, true); // proba zamkniecia tych powyzej
-//        set_close_on_exec(STDERR_FILENO, true);
+    ASSERT_SYS_OK(close(out[1]));
+    ASSERT_SYS_OK(close(err[1]));
 
     ASSERT_SYS_OK(execvp(parts[1], parts+1));
 }
 
-void* close_task(void* data) { // niech sam sie zabija
+void* close_task(void* data) {
     struct Task* tk = data;
 
     int status;
-//    printf("nazywam sie %d.\n", tk->id);
     ASSERT_SYS_OK(waitpid(tk->pid, &status, 0));
-//    printf("nazywam sie %d.\n", tk->id);
 
     pthread_join(tk->out_thread, NULL);
     pthread_join(tk->err_thread, NULL);
 
-    close(tk->read_dsc_out); // nic nie robi?
-    close(tk->read_dsc_err); // nic nie robi?
+    close(tk->read_dsc_out);
+    close(tk->read_dsc_err);
 
     pthread_mutex_destroy(tk->mutex_out);
     pthread_mutex_destroy(tk->mutex_err);
 
-    pthread_mutex_lock(tk->mutex);
-
-//    printf("nazywam sie %d.\n", tk->id);
     if (WIFEXITED(status))
         printf("Task %d ended: status %d.\n", tk->id, WEXITSTATUS(status));
     else if (WIFSIGNALED(status))
@@ -159,13 +128,11 @@ void* close_task(void* data) { // niech sam sie zabija
     else
         printf("Task %d ended: unknown.\n", tk->id);
 
-    pthread_mutex_unlock(tk->mutex);
 
     return NULL;
 }
 
 void run(struct Task* tk, char** parts) {
-    tk->quit = false;
     tk->s_out = "";
     tk->s_err = "";
 
@@ -190,13 +157,12 @@ void run(struct Task* tk, char** parts) {
     pid_t pid;
     ASSERT_SYS_OK(pid = fork());
     if (!pid) {
-//        usleep(5000000);
         create_exec_process(parts, pipe_dsc_out, pipe_dsc_err);
     } else {
         tk->pid = pid;
         printf("Task %d started: pid %d.\n", tk->id, (int) pid);
 
-        ASSERT_SYS_OK(close(pipe_dsc_out[1]));  // Close the original copy.
+        ASSERT_SYS_OK(close(pipe_dsc_out[1]));
         ASSERT_SYS_OK(close(pipe_dsc_err[1]));
     }
 
@@ -221,21 +187,12 @@ void quit(struct Task tasks[]) {
     }
 
     for (int i = 0; i <= free_task_id; i++) {
-//        printf("id: %d\n", tasks[i].id);
         pthread_join(tasks[i].close_thread, NULL);
-//        printf("id: %d\n", tasks[i].id);
     }
-
-
-//    printf("killed\n");
 }
 
 int main() {
     struct Task tasks[MAX_N_TASKS];
-
-    pthread_mutex_t mutex;
-    pthread_mutex_init(&mutex, NULL);
-    pthread_mutex_lock(&mutex);
 
     char *buffer;
     size_t bufsize = 512;
@@ -249,16 +206,7 @@ int main() {
         }
 
         buffer[strcspn(buffer, "\n")] = 0;
-//        printf("Whole sentence: '%s'\n", buffer);
-
         char **parts = split_string(buffer);
-
-//        int i = 0;
-//        while (parts[i] != NULL) {
-//            printf("You typed: '%s'\n", parts[i]);
-//
-//            i++;
-//        }
 
         if (strcmp(parts[0], "run") == 0) {
             free_task_id++;
@@ -271,7 +219,6 @@ int main() {
             pthread_mutex_init(&mutex_err, NULL);
             tk->mutex_err = &mutex_err;
 
-            tk->mutex = &mutex;
             tk->id = free_task_id;
             run(tk, parts);
         }
@@ -306,17 +253,9 @@ int main() {
         }
 
         free_split_string(parts);
-
-//        usleep(1000000);
-        pthread_mutex_unlock(&mutex);
-        usleep(1000);
-        pthread_mutex_lock(&mutex);
     }
-    pthread_mutex_unlock(&mutex);
     free(buffer);
     quit(tasks);
-
-    pthread_mutex_destroy(&mutex);
 
     return 0;
 }

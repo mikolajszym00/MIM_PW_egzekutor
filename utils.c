@@ -19,13 +19,13 @@
 void set_close_on_exec(int file_descriptor, bool value)
 {
     int flags = fcntl(file_descriptor, F_GETFD);
-//    ASSERT_SYS_OK(flags);
+    ASSERT_SYS_OK(flags);
     if (value)
         flags |= FD_CLOEXEC;
     else
         flags &= ~FD_CLOEXEC;
-    fcntl(file_descriptor, F_SETFD, flags);
-//    ASSERT_SYS_OK(fcntl(file_descriptor, F_SETFD, flags));
+//    fcntl(file_descriptor, F_SETFD, flags);
+    ASSERT_SYS_OK(fcntl(file_descriptor, F_SETFD, flags));
 }
 
 char** split_string(const char* s)
@@ -60,8 +60,8 @@ void free_split_string(char** parts)
 bool read_line(char* buffer, size_t size_of_buffer, FILE* file)
 {
     if (size_of_buffer < 2)
-        exit(2);
-//        fatal("Buffer too small: %d\n", size_of_buffer);
+//        exit(2);
+        fatal("Buffer too small: %d\n", size_of_buffer);
 
     char* line = NULL;
     size_t n_bytes;
@@ -69,8 +69,8 @@ bool read_line(char* buffer, size_t size_of_buffer, FILE* file)
 
     if (n_chars == -1) {
         if (ferror(file))
-            exit(2137);
-//            syserr("Getline failed.");
+//            exit(2137);
+            syserr("Getline failed.");
         assert(feof(file));
         buffer[0] = '\0';
         return false;
@@ -85,13 +85,13 @@ bool read_line(char* buffer, size_t size_of_buffer, FILE* file)
 
     size_t len = strlen(line);
     if (len < n_chars)
-        exit(2);
-//        fatal("Null character in input.");
+//        exit(2);
+        fatal("Null character in input.");
     assert(n_chars == len);
 
     if (len + 1 > size_of_buffer)
-        exit(2);
-//        fatal("Line too long: %d > %d.", len, size_of_buffer - 1);
+//        exit(2);
+        fatal("Line too long: %d > %d.", len, size_of_buffer - 1);
     memcpy(buffer, line, len + 1);
 
     free(line);
