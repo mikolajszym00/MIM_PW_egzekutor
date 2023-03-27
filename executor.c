@@ -45,7 +45,7 @@ void get_last_line(char** msg) {
         ptr = strtok(NULL, delim);
     }
 
-    *msg = strdup(prev_ptr);
+    *msg = prev_ptr;
 }
 
 void* create_stream_process(void* data) {
