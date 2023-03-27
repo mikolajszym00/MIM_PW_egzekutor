@@ -36,18 +36,16 @@ struct pair_task_bool {
 void get_last_line(char** msg) {
     char delim[] = "\n";
 
+    char* prev_ptr = *msg;
     char* ptr = strtok(*msg, delim);
-
-    char* final_sentence = (char *)malloc(strlen((const char *) msg) * sizeof(char));
 
     while(ptr != NULL)
     {
-        final_sentence = strdup(ptr);
+        prev_ptr = ptr;
         ptr = strtok(NULL, delim);
     }
 
-    *msg = strdup(final_sentence);
-    free(final_sentence);
+    *msg = strdup(prev_ptr);
 }
 
 void* create_stream_process(void* data) {
